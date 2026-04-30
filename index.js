@@ -11,24 +11,24 @@ const REDIRECT_URI = process.env.REDIRECT_URI;
 
 const USERS_FILE = "users.json";
 
-/* Load saved users */
+
 function loadUsers() {
     if (!fs.existsSync(USERS_FILE)) return [];
     return JSON.parse(fs.readFileSync(USERS_FILE));
 }
 
-/* Save users */
 function saveUsers(users) {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
 }
 
-/* OAuth callback */
+
+/* CALLBACK ROUTE */
 app.get("/callback", async (req, res) => {
 
     const code = req.query.code;
 
     if (!code)
-        return res.send("❌ No OAuth code received");
+        return res.send("Missing OAuth code");
 
     try {
 
@@ -36,11 +36,11 @@ app.get("/callback", async (req, res) => {
             client_id: CLIENT_ID,
             client_secret: CLIENT_SECRET,
             grant_type: "authorization_code",
-            code: code,
+            code,
             redirect_uri: REDIRECT_URI
         });
 
-        const tokenResponse = await fetch(
+        const tokenRes = await fetch(
             "https://discord.com/api/oauth2/token",
             {
                 method: "POST",
@@ -52,9 +52,9 @@ app.get("/callback", async (req, res) => {
             }
         );
 
-        const tokenData = await tokenResponse.json();
+        const tokenData = await tokenRes.json();
 
-        const userResponse = await fetch(
+        const userRes = await fetch(
             "https://discord.com/api/users/@me",
             {
                 headers: {
@@ -64,7 +64,7 @@ app.get("/callback", async (req, res) => {
             }
         );
 
-        const user = await userResponse.json();
+        const user = await userRes.json();
 
         let users = loadUsers();
 
@@ -73,25 +73,46 @@ app.get("/callback", async (req, res) => {
             saveUsers(users);
         }
 
-        res.send("✅ Authorization successful. Account saved!");
+        res.send("Authorization saved");
 
-    } catch (err) {
+    } catch {
 
-        console.error(err);
-
-        res.send("❌ Authorization failed.");
+        res.send("OAuth failed");
 
     }
 });
 
 
-/* Join all users using invite code */
-app.get("/invitejoin", async (req, res) => {
+/* DASHBOARD PAGE */
+app.get("/", (req, res) => {
+
+    const users = loadUsers();
+
+    res.send(`
+    <h2>Admin Panel</h2>
+
+    <p>Total authorized users: ${users.length}</p>
+
+    <form action="/join">
+        Invite Code:
+        <input name="code" placeholder="abc123">
+        <button>Join Server</button>
+    </form>
+
+    <br>
+
+    <a href="/users">View User IDs</a>
+    `);
+});
+
+
+/* JOIN SERVER ROUTE */
+app.get("/join", async (req, res) => {
 
     const invite = req.query.code;
 
     if (!invite)
-        return res.send("Missing invite code");
+        return res.send("Missing invite");
 
     const inviteData = await fetch(
         `https://discord.com/api/v10/invites/${invite}`
@@ -125,46 +146,14 @@ app.get("/invitejoin", async (req, res) => {
             joined++;
     }
 
-    res.send(`✅ Joined ${joined} users to ${json.guild.name}`);
-
+    res.send(`Joined ${joined} users`);
 });
 
 
-/* Show authorized users */
+/* USERS LIST */
 app.get("/users", (req, res) => {
 
     res.json(loadUsers());
-
-});
-
-
-/* Show total count */
-app.get("/stats", (req, res) => {
-
-    const users = loadUsers();
-
-    res.send(`Authorized users: ${users.length}`);
-
-});
-
-
-/* Dashboard homepage */
-app.get("/", (req, res) => {
-
-    res.send(`
-        <h2>Discord OAuth Join Panel</h2>
-
-        <form action="/invitejoin">
-            Invite Code:
-            <input name="code" placeholder="abc123">
-            <button>Join Server</button>
-        </form>
-
-        <br>
-
-        <a href="/stats">View Authorized Count</a><br>
-        <a href="/users">View Users List</a>
-    `);
 
 });
 
