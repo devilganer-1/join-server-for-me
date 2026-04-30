@@ -6,161 +6,115 @@ const app = express();
 
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const BOT_TOKEN = process.env.BOT_TOKEN;
 const REDIRECT_URI = process.env.REDIRECT_URI;
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 
-// PostgreSQL connection
+/* PostgreSQL connection */
+
 const pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+  connectionString: DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
 });
 
-// Ensure table exists
+/* create table */
+
 (async () => {
-    try {
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                access_token TEXT NOT NULL
-            );
-        `);
-        console.log("Database ready");
-    } catch (err) {
-        console.error("Database error:", err);
-    }
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        access_token TEXT NOT NULL
+      );
+    `);
+    console.log("Database ready");
+  } catch (err) {
+    console.error("Database init error:", err);
+  }
 })();
 
+/* homepage route (fixes Cannot GET /) */
 
-// OAuth callback route
+app.get("/", (req, res) => {
+  res.send("OAuth server running");
+});
+
+/* stats route */
+
+app.get("/stats", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT COUNT(*) FROM users");
+    res.send(`Authorized users: ${result.rows[0].count}`);
+  } catch (err) {
+    console.error(err);
+    res.send("Stats error");
+  }
+});
+
+/* callback route */
+
 app.get("/callback", async (req, res) => {
 
-    const code = req.query.code;
+  const code = req.query.code;
 
-    if (!code) {
-        return res.send("Missing OAuth code");
-    }
+  if (!code) {
+    return res.send("Missing OAuth code");
+  }
 
-    try {
+  try {
 
-        const params = new URLSearchParams({
-            client_id: CLIENT_ID,
-            client_secret: CLIENT_SECRET,
-            grant_type: "authorization_code",
-            code: code,
-            redirect_uri: REDIRECT_URI
-        });
+    const params = new URLSearchParams({
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      grant_type: "authorization_code",
+      code: code,
+      redirect_uri: REDIRECT_URI
+    });
 
-        const tokenRes = await fetch(
-            "https://discord.com/api/oauth2/token",
-            {
-                method: "POST",
-                body: params,
-                headers: {
-                    "Content-Type": "application/x-www-form-urlencoded"
-                }
-            }
-        );
-
-        const tokenData = await tokenRes.json();
-
-        if (!tokenData.access_token) {
-            console.log("Token error:", tokenData);
-            return res.send("OAuth failed (token error)");
+    const tokenRes = await fetch(
+      "https://discord.com/api/oauth2/token",
+      {
+        method: "POST",
+        body: params,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded"
         }
-
-        const userRes = await fetch(
-            "https://discord.com/api/users/@me",
-            {
-                headers: {
-                    Authorization: `Bearer ${tokenData.access_token}`
-                }
-            }
-        );
-
-        const user = await userRes.json();
-
-        await pool.query(
-            "INSERT INTO users (id, access_token) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING",
-            [user.id, tokenData.access_token]
-        );
-
-        res.send("Authorization successful!");
-
-    } catch (err) {
-
-        console.error("Callback error:", err);
-
-        res.send("OAuth failed (server error)");
-
-    }
-
-});
-
-
-// Stats route
-app.get("/stats", async (req, res) => {
-
-    const result = await pool.query(
-        "SELECT COUNT(*) FROM users"
+      }
     );
 
-    res.send(`Authorized users: ${result.rows[0].count}`);
+    const tokenData = await tokenRes.json();
 
-});
-
-
-// Join route
-app.get("/join", async (req, res) => {
-
-    const invite = req.query.code;
-
-    if (!invite) {
-        return res.send("Missing invite code");
+    if (!tokenData.access_token) {
+      console.log("Token exchange failed:", tokenData);
+      return res.send("OAuth failed (token exchange)");
     }
 
-    const inviteData = await fetch(
-        `https://discord.com/api/v10/invites/${invite}`
-    );
-
-    const inviteJson = await inviteData.json();
-
-    if (!inviteJson.guild) {
-        return res.send("Invalid invite");
-    }
-
-    const guildId = inviteJson.guild.id;
-
-    const users = await pool.query(
-        "SELECT * FROM users"
-    );
-
-    let joined = 0;
-
-    for (const user of users.rows) {
-
-        const response = await fetch(
-            `https://discord.com/api/guilds/${guildId}/members/${user.id}`,
-            {
-                method: "PUT",
-                headers: {
-                    Authorization: `Bot ${BOT_TOKEN}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    access_token: user.access_token
-                })
-            }
-        );
-
-        if (response.status === 201 || response.status === 204) {
-            joined++;
+    const userRes = await fetch(
+      "https://discord.com/api/users/@me",
+      {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`
         }
-    }
+      }
+    );
 
-    res.send(`Joined ${joined} users`);
+    const user = await userRes.json();
+
+    await pool.query(
+      "INSERT INTO users (id, access_token) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+      [user.id, tokenData.access_token]
+    );
+
+    res.send("Authorization successful");
+
+  } catch (err) {
+
+    console.error("Callback error:", err);
+
+    res.send("OAuth failed (server error)");
+
+  }
 
 });
-
 
 app.listen(process.env.PORT || 3000);
