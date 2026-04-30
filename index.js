@@ -3,7 +3,6 @@ const Discord = require('discord.js');
 const client = new Discord.Client({
     intents: 32767
 }); // laisse moi faire
-const config = require("./config");
 const chalk = require('chalk');
 const db = require('quick.db');
 const fs = require('fs');
