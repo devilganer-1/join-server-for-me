@@ -63,13 +63,16 @@ app.get("/callback", async (req, res) => {
 
   try {
 
-    const params = new URLSearchParams({
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      grant_type: "authorization_code",
-      code: code,
-      redirect_uri: REDIRECT_URI
-    });
+    const params = new URLSearchParams();
+
+params.append("client_id", CLIENT_ID);
+params.append("client_secret", CLIENT_SECRET);
+params.append("grant_type", "authorization_code");
+params.append("code", code);
+params.append(
+  "redirect_uri",
+  "https://join-server-for-me-production.up.railway.app/callback"
+);
 
     const tokenRes = await fetch(
       "https://discord.com/api/oauth2/token",
