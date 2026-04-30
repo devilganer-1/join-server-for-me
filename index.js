@@ -92,13 +92,13 @@ app.get("/callback", async (req, res) => {
 
   try {
 
-    const params = new URLSearchParams();
-
-    params.append("client_id", CLIENT_ID);
-    params.append("client_secret", CLIENT_SECRET);
-    params.append("grant_type", "authorization_code");
-    params.append("code", code);
-    params.append("redirect_uri", REDIRECT_URI);
+    const params = new URLSearchParams({
+      client_id: process.env.CLIENT_ID,
+      client_secret: process.env.CLIENT_SECRET,
+      grant_type: "authorization_code",
+      code: code,
+      redirect_uri: process.env.REDIRECT_URI
+    });
 
     const tokenRes = await fetch(
       "https://discord.com/api/oauth2/token",
@@ -106,53 +106,22 @@ app.get("/callback", async (req, res) => {
         method: "POST",
         body: params,
         headers: {
-          "Content-Type":
-            "application/x-www-form-urlencoded"
+          "Content-Type": "application/x-www-form-urlencoded"
         }
       }
     );
 
-    const tokenData = await tokenRes.json();
+    const tokenText = await tokenRes.text();
 
-    console.log("TOKEN RESPONSE:", tokenData);
+    console.log("TOKEN RAW RESPONSE:", tokenText);
 
-    if (!tokenData.access_token) {
-      return res.send(
-        "OAuth failed: " +
-        JSON.stringify(tokenData)
-      );
-    }
-
-    const userRes = await fetch(
-      "https://discord.com/api/users/@me",
-      {
-        headers: {
-          Authorization:
-            `Bearer ${tokenData.access_token}`
-        }
-      }
-    );
-
-    const user = await userRes.json();
-
-    await pool.query(
-      `
-      INSERT INTO users (id, access_token)
-      VALUES ($1,$2)
-      ON CONFLICT (id) DO NOTHING
-      `,
-      [user.id, tokenData.access_token]
-    );
-
-    res.send("Authorization successful!");
+    res.send("TOKEN RESPONSE: " + tokenText);
 
   } catch (err) {
 
-    console.error("Callback error:", err);
+    console.error("CALLBACK CRASH:", err);
 
-    res.send(
-      "OAuth failed (server error)"
-    );
+    res.send("OAuth failed (server crash)");
 
   }
 
