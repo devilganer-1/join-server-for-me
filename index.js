@@ -8,36 +8,38 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const REDIRECT_URI = process.env.REDIRECT_URI;
+const DATABASE_URL = process.env.DATABASE_URL;
 
+// PostgreSQL connection
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL.includes("localhost")
-  ? false
-  : { rejectUnauthorized: false }
+    connectionString: DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
 });
 
-
-/* CREATE TABLE IF NOT EXISTS */
-
+// Ensure table exists
 (async () => {
-
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            access_token TEXT
-        )
-    `);
-
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                access_token TEXT NOT NULL
+            );
+        `);
+        console.log("Database ready");
+    } catch (err) {
+        console.error("Database error:", err);
+    }
 })();
 
 
-/* SAVE USER AFTER AUTHORIZE */
-
+// OAuth callback route
 app.get("/callback", async (req, res) => {
 
     const code = req.query.code;
 
-    if (!code) return res.send("Missing OAuth code");
+    if (!code) {
+        return res.send("Missing OAuth code");
+    }
 
     try {
 
@@ -45,7 +47,7 @@ app.get("/callback", async (req, res) => {
             client_id: CLIENT_ID,
             client_secret: CLIENT_SECRET,
             grant_type: "authorization_code",
-            code,
+            code: code,
             redirect_uri: REDIRECT_URI
         });
 
@@ -55,20 +57,23 @@ app.get("/callback", async (req, res) => {
                 method: "POST",
                 body: params,
                 headers: {
-                    "Content-Type":
-                        "application/x-www-form-urlencoded"
+                    "Content-Type": "application/x-www-form-urlencoded"
                 }
             }
         );
 
         const tokenData = await tokenRes.json();
 
+        if (!tokenData.access_token) {
+            console.log("Token error:", tokenData);
+            return res.send("OAuth failed (token error)");
+        }
+
         const userRes = await fetch(
             "https://discord.com/api/users/@me",
             {
                 headers: {
-                    Authorization:
-                        `Bearer ${tokenData.access_token}`
+                    Authorization: `Bearer ${tokenData.access_token}`
                 }
             }
         );
@@ -76,55 +81,66 @@ app.get("/callback", async (req, res) => {
         const user = await userRes.json();
 
         await pool.query(
-            `INSERT INTO users (id, access_token)
-             VALUES ($1, $2)
-             ON CONFLICT (id) DO NOTHING`,
+            "INSERT INTO users (id, access_token) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING",
             [user.id, tokenData.access_token]
         );
 
-        res.send("Authorization saved!");
+        res.send("Authorization successful!");
 
     } catch (err) {
 
-        console.error(err);
+        console.error("Callback error:", err);
 
-        res.send("OAuth failed");
+        res.send("OAuth failed (server error)");
 
     }
 
 });
 
 
-/* JOIN USERS */
+// Stats route
+app.get("/stats", async (req, res) => {
 
+    const result = await pool.query(
+        "SELECT COUNT(*) FROM users"
+    );
+
+    res.send(`Authorized users: ${result.rows[0].count}`);
+
+});
+
+
+// Join route
 app.get("/join", async (req, res) => {
 
     const invite = req.query.code;
 
-    if (!invite)
-        return res.send("Missing invite");
+    if (!invite) {
+        return res.send("Missing invite code");
+    }
 
     const inviteData = await fetch(
         `https://discord.com/api/v10/invites/${invite}`
     );
 
-    const json = await inviteData.json();
+    const inviteJson = await inviteData.json();
 
-    if (!json.guild)
+    if (!inviteJson.guild) {
         return res.send("Invalid invite");
+    }
 
-    const guild = json.guild.id;
+    const guildId = inviteJson.guild.id;
 
-    const result = await pool.query(
+    const users = await pool.query(
         "SELECT * FROM users"
     );
 
     let joined = 0;
 
-    for (const user of result.rows) {
+    for (const user of users.rows) {
 
-        const r = await fetch(
-            `https://discord.com/api/guilds/${guild}/members/${user.id}`,
+        const response = await fetch(
+            `https://discord.com/api/guilds/${guildId}/members/${user.id}`,
             {
                 method: "PUT",
                 headers: {
@@ -137,54 +153,12 @@ app.get("/join", async (req, res) => {
             }
         );
 
-        if (r.status === 201 || r.status === 204)
+        if (response.status === 201 || response.status === 204) {
             joined++;
-
+        }
     }
 
     res.send(`Joined ${joined} users`);
-
-});
-
-
-/* SHOW STATS */
-
-app.get("/stats", async (req, res) => {
-
-    const result = await pool.query(
-        "SELECT COUNT(*) FROM users"
-    );
-
-    res.send(
-        `Authorized users: ${result.rows[0].count}`
-    );
-
-});
-
-
-/* ADMIN PANEL */
-
-app.get("/", async (req, res) => {
-
-    const result = await pool.query(
-        "SELECT COUNT(*) FROM users"
-    );
-
-    res.send(`
-        <h2>Admin Panel</h2>
-
-        <p>Total users: ${result.rows[0].count}</p>
-
-        <form action="/join">
-            Invite Code:
-            <input name="code">
-            <button>Join Server</button>
-        </form>
-
-        <br>
-
-        <a href="/stats">Refresh Stats</a>
-    `);
 
 });
 
