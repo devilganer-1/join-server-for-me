@@ -1,6 +1,6 @@
 const express = require("express");
 const fetch = require("node-fetch");
-const fs = require("fs");
+const { Pool } = require("pg");
 
 const app = express();
 
@@ -9,26 +9,33 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const REDIRECT_URI = process.env.REDIRECT_URI;
 
-const USERS_FILE = "users.json";
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+});
 
 
-function loadUsers() {
-    if (!fs.existsSync(USERS_FILE)) return [];
-    return JSON.parse(fs.readFileSync(USERS_FILE));
-}
+/* CREATE TABLE IF NOT EXISTS */
 
-function saveUsers(users) {
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-}
+(async () => {
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            access_token TEXT
+        )
+    `);
+
+})();
 
 
-/* CALLBACK ROUTE */
+/* SAVE USER AFTER AUTHORIZE */
+
 app.get("/callback", async (req, res) => {
 
     const code = req.query.code;
 
-    if (!code)
-        return res.send("Missing OAuth code");
+    if (!code) return res.send("Missing OAuth code");
 
     try {
 
@@ -66,47 +73,28 @@ app.get("/callback", async (req, res) => {
 
         const user = await userRes.json();
 
-        let users = loadUsers();
+        await pool.query(
+            `INSERT INTO users (id, access_token)
+             VALUES ($1, $2)
+             ON CONFLICT (id) DO NOTHING`,
+            [user.id, tokenData.access_token]
+        );
 
-        if (!users.includes(user.id)) {
-            users.push(user.id);
-            saveUsers(users);
-        }
+        res.send("Authorization saved!");
 
-        res.send("Authorization saved");
+    } catch (err) {
 
-    } catch {
+        console.error(err);
 
         res.send("OAuth failed");
 
     }
+
 });
 
 
-/* DASHBOARD PAGE */
-app.get("/", (req, res) => {
+/* JOIN USERS */
 
-    const users = loadUsers();
-
-    res.send(`
-    <h2>Admin Panel</h2>
-
-    <p>Total authorized users: ${users.length}</p>
-
-    <form action="/join">
-        Invite Code:
-        <input name="code" placeholder="abc123">
-        <button>Join Server</button>
-    </form>
-
-    <br>
-
-    <a href="/users">View User IDs</a>
-    `);
-});
-
-
-/* JOIN SERVER ROUTE */
 app.get("/join", async (req, res) => {
 
     const invite = req.query.code;
@@ -125,35 +113,76 @@ app.get("/join", async (req, res) => {
 
     const guild = json.guild.id;
 
-    const users = loadUsers();
+    const result = await pool.query(
+        "SELECT * FROM users"
+    );
 
     let joined = 0;
 
-    for (const id of users) {
+    for (const user of result.rows) {
 
         const r = await fetch(
-            `https://discord.com/api/guilds/${guild}/members/${id}`,
+            `https://discord.com/api/guilds/${guild}/members/${user.id}`,
             {
                 method: "PUT",
                 headers: {
                     Authorization: `Bot ${BOT_TOKEN}`,
                     "Content-Type": "application/json"
-                }
+                },
+                body: JSON.stringify({
+                    access_token: user.access_token
+                })
             }
         );
 
         if (r.status === 201 || r.status === 204)
             joined++;
+
     }
 
     res.send(`Joined ${joined} users`);
+
 });
 
 
-/* USERS LIST */
-app.get("/users", (req, res) => {
+/* SHOW STATS */
 
-    res.json(loadUsers());
+app.get("/stats", async (req, res) => {
+
+    const result = await pool.query(
+        "SELECT COUNT(*) FROM users"
+    );
+
+    res.send(
+        `Authorized users: ${result.rows[0].count}`
+    );
+
+});
+
+
+/* ADMIN PANEL */
+
+app.get("/", async (req, res) => {
+
+    const result = await pool.query(
+        "SELECT COUNT(*) FROM users"
+    );
+
+    res.send(`
+        <h2>Admin Panel</h2>
+
+        <p>Total users: ${result.rows[0].count}</p>
+
+        <form action="/join">
+            Invite Code:
+            <input name="code">
+            <button>Join Server</button>
+        </form>
+
+        <br>
+
+        <a href="/stats">Refresh Stats</a>
+    `);
 
 });
 
